@@ -1,9 +1,11 @@
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import type { WordScore } from "@shared/schema";
+import type { WordScore, Language, AIModel } from "@shared/schema";
 
 interface PronunciationResultsProps {
   wordScores: WordScore[];
+  language: Language;
+  model: AIModel;
 }
 
 function getScoreColor(score: number): string {
@@ -13,11 +15,23 @@ function getScoreColor(score: number): string {
   return "bg-red-500/20 text-red-700 dark:text-red-400 border-red-500/30";
 }
 
-export default function PronunciationResults({ wordScores }: PronunciationResultsProps) {
+export default function PronunciationResults({ wordScores, language, model }: PronunciationResultsProps) {
   if (wordScores.length === 0) return null;
+
+  const languageDisplay = language === "hindi" ? "Hindi" : "Kannada";
+  const modelDisplay = model.replace("gemini-", "Gemini ");
 
   return (
     <Card className="p-6" data-testid="card-results">
+      <div className="mb-4 flex flex-wrap gap-2 items-center">
+        <span className="text-sm text-muted-foreground">Analysis for:</span>
+        <Badge variant="secondary" className="text-sm">
+          {languageDisplay}
+        </Badge>
+        <Badge variant="secondary" className="text-sm">
+          {modelDisplay}
+        </Badge>
+      </div>
       <h3 className="text-lg font-semibold mb-4" data-testid="text-results-title">
         Word Analysis
       </h3>

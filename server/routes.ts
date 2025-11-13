@@ -10,13 +10,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Generate a new practice sentence
   app.post("/api/sentences/generate", async (req, res) => {
     try {
-      const { language } = req.body;
-      
+      const { language, model } = req.body;
+
       if (!language || (language !== "hindi" && language !== "kannada")) {
         return res.status(400).json({ error: "Invalid language. Must be 'hindi' or 'kannada'" });
       }
 
-      const sentence = await generatePracticeSentence(language);
+      // Validate and default the model
+      const validModels = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+      const selectedModel = model && validModels.includes(model) ? model : "gemini-2.5-flash";
+
+      console.log(`📝 Generating sentence - Language: ${language}, Model: ${selectedModel}`);
+
+      const sentence = await generatePracticeSentence(language, selectedModel);
       res.json(sentence);
     } catch (error: any) {
       console.error("Error generating sentence:", error);

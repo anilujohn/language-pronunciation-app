@@ -1,17 +1,25 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { practiceSentenceSchema, pronunciationResultSchema } from "./validation";
 import { convertWebMToWAV } from "./audioConverter";
 
-// This is using Replit's AI Integrations service - from blueprint:javascript_gemini_ai_integrations
-const ai = new GoogleGenAI({
-  apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY!,
-  httpOptions: {
-    apiVersion: "",
-    baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL!,
-  },
-});
+// Initialize Google AI with standard API key
+// For local development, set GEMINI_API_KEY in your .env file
+const apiKey = process.env.GEMINI_API_KEY || process.env.AI_INTEGRATIONS_GEMINI_API_KEY || "";
+console.log("🔑 Initializing Gemini AI with API key:", apiKey ? `Yes (length: ${apiKey.length})` : "NO KEY FOUND!");
 
-export async function generatePracticeSentence(language: "hindi" | "kannada"): Promise<{ originalScript: string; transliteration: string }> {
+if (!apiKey) {
+  console.error("❌ No API key found! Please set GEMINI_API_KEY in your .env file");
+}
+
+const genAI = new GoogleGenerativeAI(apiKey);
+
+// Google AI API supports these model names directly
+// No mapping needed - use the names as-is
+
+export async function generatePracticeSentence(
+  language: "hindi" | "kannada",
+  model: "gemini-2.5-pro" | "gemini-2.5-flash" | "gemini-2.5-flash-lite" = "gemini-2.5-flash"
+): Promise<{ originalScript: string; transliteration: string }> {
   const languageName = language === "hindi" ? "Hindi" : "Kannada";
   const scriptName = language === "hindi" ? "Devanagari" : "Kannada";
   
@@ -35,13 +43,13 @@ Return ONLY a JSON object with this exact structure (no markdown, no code blocks
 Example length: "I go to the market every morning to buy fresh vegetables and fruits for my family" (16 words - aim for similar length)`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-    });
+    console.log(`🤖 Generating sentence with model: ${model}`);
 
-    // Based on blueprint example - response.text is a property not a method
-    const text = response.text || "";
+    const genModel = genAI.getGenerativeModel({ model: model });
+    const result = await genModel.generateContent(prompt);
+    const response = result.response;
+    const text = response.text();
+
     if (!text) {
       console.error("Empty response from Gemini AI");
       throw new Error("Empty response from AI");
@@ -132,29 +140,28 @@ Be encouraging in both versions. Make sure both sets of tips are helpful but tar
     console.log(`📊 WAV buffer size: ${wavBuffer.length} bytes`);
     
     const startTime = Date.now();
-    
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: [{
-        role: "user",
-        parts: [
-          { text: prompt },
-          { 
-            inlineData: { 
-              mimeType: "audio/wav",
-              data: wavBuffer.toString("base64") 
-            } 
-          }
-        ]
-      }]
-    });
+
+    // Use the model name directly
+    console.log(`🤖 Using AI model: ${model}`);
+    const genModel = genAI.getGenerativeModel({ model: model });
+
+    const result = await genModel.generateContent([
+      prompt,
+      {
+        inlineData: {
+          data: wavBuffer.toString("base64"),
+          mimeType: "audio/wav",
+        },
+      },
+    ]);
 
     const elapsedTime = Date.now() - startTime;
     console.log(`⏱️ API call completed in ${elapsedTime}ms`);
 
-    const text = response.text || "";
+    const apiResponse = result.response;
+    const text = apiResponse.text();
     console.log(`📤 Response received (${text.length} characters)`);
-    
+
     if (!text) {
       console.error("❌ Empty response from Gemini AI");
       throw new Error("Empty response from AI");

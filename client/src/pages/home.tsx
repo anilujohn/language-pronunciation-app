@@ -39,18 +39,21 @@ export default function Home() {
     loadNewSentence();
   }, []);
 
-  const loadNewSentence = async (languageToUse?: Language) => {
+  const loadNewSentence = async (languageToUse?: Language, modelToUse?: AIModel) => {
     const targetLanguage = languageToUse || language;
+    const targetModel = modelToUse || selectedModel;
+    console.log("🔵 USER ACTION: Loading new sentence", { language: targetLanguage, model: targetModel });
     setIsLoadingSentence(true);
     setWordScores([]);
     setSimpleTips([]);
     setDetailedFeedback([]);
-    
+
     try {
+      console.log("📤 Sending request to /api/sentences/generate", { language: targetLanguage, model: targetModel });
       const response = await fetch("/api/sentences/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ language: targetLanguage }),
+        body: JSON.stringify({ language: targetLanguage, model: targetModel }),
       });
 
       if (!response.ok) {
@@ -58,9 +61,13 @@ export default function Home() {
       }
 
       const sentence = await response.json();
+      console.log("✅ Sentence loaded successfully", {
+        originalScript: sentence.originalScript?.substring(0, 30) + "...",
+        transliteration: sentence.transliteration?.substring(0, 30) + "..."
+      });
       setCurrentSentence(sentence);
     } catch (error) {
-      console.error("Error loading sentence:", error);
+      console.error("❌ Error loading sentence:", error);
       
       // Provide fallback sentence so UI isn't stuck
       const fallbackSentences = {
@@ -87,6 +94,7 @@ export default function Home() {
   };
 
   const handleLanguageChange = (newLanguage: Language) => {
+    console.log("🔵 USER ACTION: Changed language to", newLanguage);
     setLanguage(newLanguage);
     setCurrentSentence(null);
     setWordScores([]);
@@ -96,19 +104,37 @@ export default function Home() {
     loadNewSentence(newLanguage);
   };
 
+  const handleModelChange = (newModel: AIModel) => {
+    console.log("🔵 USER ACTION: Changed model to", newModel);
+    setSelectedModel(newModel);
+    // Immediately generate a new sentence with the new model
+    setCurrentSentence(null);
+    setWordScores([]);
+    setSimpleTips([]);
+    setDetailedFeedback([]);
+
+    // Generate new sentence using the new model
+    // Use setTimeout to ensure state is updated before loading
+    setTimeout(() => {
+      loadNewSentence(language, newModel);
+    }, 0);
+  };
+
   const handleListen = async () => {
     if (!currentSentence) return;
-    
+
+    console.log("🔵 USER ACTION: Clicked Listen button", { language, text: currentSentence.originalScript });
     setIsPlaying(true);
     try {
       // Check if speech synthesis is supported
       if (!('speechSynthesis' in window)) {
         throw new Error("Text-to-speech is not supported in your browser");
       }
-      
+
       await speechSynth.current.speak(currentSentence.originalScript, language);
+      console.log("✅ Audio playback completed successfully");
     } catch (error: any) {
-      console.error("Error playing audio:", error);
+      console.error("❌ Error playing audio:", error);
       toast({
         title: "Audio Playback Failed",
         description: error.message || "Your browser may not support this language. Try using Chrome or Edge.",
@@ -120,11 +146,13 @@ export default function Home() {
   };
 
   const handleRecord = async () => {
+    console.log("🔵 USER ACTION: Clicked Record button");
     try {
       await audioRecorder.current.startRecording();
       setIsRecording(true);
+      console.log("✅ Recording started successfully");
     } catch (error: any) {
-      console.error("Error starting recording:", error);
+      console.error("❌ Error starting recording:", error);
       toast({
         title: "Microphone Access Required",
         description: error.message || "Please allow microphone access to record your pronunciation.",
@@ -135,14 +163,20 @@ export default function Home() {
 
   const handleStopRecording = async () => {
     if (!currentSentence) return;
-    
+
+    console.log("🔵 USER ACTION: Stopped recording", { language, model: selectedModel, text: currentSentence.originalScript });
     setIsRecording(false);
     setIsProcessing(true);
 
     let response: Response | undefined;
     try {
       const audioBlob = await audioRecorder.current.stopRecording();
-      
+      console.log("📤 Sending audio to /api/pronunciation/analyze", {
+        audioSize: audioBlob.size,
+        language,
+        model: selectedModel
+      });
+
       // Send audio to backend for analysis
       const formData = new FormData();
       formData.append("audio", audioBlob, "recording.webm");
@@ -160,10 +194,15 @@ export default function Home() {
       }
 
       const result = await response.json();
+      console.log("✅ Pronunciation analysis successful", {
+        wordCount: result.wordScores?.length,
+        simpleTipsCount: result.simpleTips?.length,
+        detailedFeedbackCount: result.detailedFeedback?.length
+      });
       setWordScores(result.wordScores || []);
       setSimpleTips(result.simpleTips || []);
       setDetailedFeedback(result.detailedFeedback || []);
-      
+
       toast({
         title: "Analysis Complete",
         description: "Your pronunciation has been analyzed!",
@@ -225,9 +264,9 @@ export default function Home() {
             <LanguageSelector language={language} onLanguageChange={handleLanguageChange} />
           </div>
 
-          <ModelSelector 
-            selectedModel={selectedModel} 
-            onModelChange={setSelectedModel}
+          <ModelSelector
+            selectedModel={selectedModel}
+            onModelChange={handleModelChange}
           />
 
           {isLoadingSentence ? (
@@ -268,7 +307,11 @@ export default function Home() {
 
           {hasResults && !isProcessing && (
             <>
-              <PronunciationResults wordScores={wordScores} />
+              <PronunciationResults
+                wordScores={wordScores}
+                language={language}
+                model={selectedModel}
+              />
               <FeedbackSection simpleTips={simpleTips} detailedFeedback={detailedFeedback} />
             </>
           )}
