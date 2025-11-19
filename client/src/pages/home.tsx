@@ -3,12 +3,13 @@ import { Button } from "@/components/ui/button";
 import LanguageSelector from "@/components/LanguageSelector";
 import SentenceDisplay from "@/components/SentenceDisplay";
 import AudioControls from "@/components/AudioControls";
-import PronunciationResults from "@/components/PronunciationResults";
-import FeedbackSection from "@/components/FeedbackSection";
+import PronunciationResultsV2 from "@/components/PronunciationResultsV2";
+import CostBreakdown from "@/components/CostBreakdown";
 import LoadingSpinner from "@/components/LoadingSpinner";
-import ModelSelector from "@/components/ModelSelector";
+import TokenUsageDisplay from "@/components/TokenUsageDisplay";
 import { useToast } from "@/hooks/use-toast";
-import type { Language, WordScore, AIModel } from "@shared/schema";
+import type { Language } from "@shared/schema";
+import type { TokenUsage } from "@/lib/tokenCost";
 import { RefreshCw } from "lucide-react";
 import { AudioRecorder } from "@/lib/audioRecorder";
 import { SpeechSynthesizer } from "@/lib/speechSynthesis";
@@ -16,20 +17,59 @@ import { SpeechSynthesizer } from "@/lib/speechSynthesis";
 interface PracticeSentence {
   originalScript: string;
   transliteration: string;
+  tokenUsage?: TokenUsage;
+}
+
+// New 2-stage analysis result structure
+interface WordScore {
+  word: string;
+  transliteration: string;
+  transcribedWord: string;
+  score: number;
+}
+
+interface WordTip {
+  word: string;
+  transliteration: string;
+  tip: string;
+}
+
+interface StageCost {
+  name: string;
+  tokenUsage: TokenUsage;
+}
+
+interface AnalysisResult {
+  transcription: string;
+  transcriptionTransliteration: string;
+  wordScores: WordScore[];
+  overallScore: number;
+  tips: WordTip[];
+  timing: {
+    stage1: number;
+    stage2: number;
+    stage3: number;
+    total: number;
+  };
+  costBreakdown: {
+    stage1: StageCost;
+    stage2: StageCost;
+    stage3: StageCost;
+    total: TokenUsage;
+  };
 }
 
 export default function Home() {
   const [language, setLanguage] = useState<Language>("hindi");
-  const [selectedModel, setSelectedModel] = useState<AIModel>("gemini-2.5-flash");
   const [currentSentence, setCurrentSentence] = useState<PracticeSentence | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoadingSentence, setIsLoadingSentence] = useState(false);
-  const [wordScores, setWordScores] = useState<WordScore[]>([]);
-  const [simpleTips, setSimpleTips] = useState<string[]>([]);
-  const [detailedFeedback, setDetailedFeedback] = useState<string[]>([]);
-  
+
+  // Analysis result (new 2-stage architecture)
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+
   const audioRecorder = useRef<AudioRecorder>(new AudioRecorder());
   const speechSynth = useRef<SpeechSynthesizer>(new SpeechSynthesizer());
   const { toast } = useToast();
@@ -39,21 +79,18 @@ export default function Home() {
     loadNewSentence();
   }, []);
 
-  const loadNewSentence = async (languageToUse?: Language, modelToUse?: AIModel) => {
+  const loadNewSentence = async (languageToUse?: Language) => {
     const targetLanguage = languageToUse || language;
-    const targetModel = modelToUse || selectedModel;
-    console.log("🔵 USER ACTION: Loading new sentence", { language: targetLanguage, model: targetModel });
+    console.log("🔵 USER ACTION: Loading new sentence", { language: targetLanguage });
     setIsLoadingSentence(true);
-    setWordScores([]);
-    setSimpleTips([]);
-    setDetailedFeedback([]);
+    setAnalysisResult(null);
 
     try {
-      console.log("📤 Sending request to /api/sentences/generate", { language: targetLanguage, model: targetModel });
+      console.log("📤 Sending request to /api/sentences/generate", { language: targetLanguage });
       const response = await fetch("/api/sentences/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ language: targetLanguage, model: targetModel }),
+        body: JSON.stringify({ language: targetLanguage, model: "gemini-2.5-flash-lite" }),
       });
 
       if (!response.ok) {
@@ -97,27 +134,9 @@ export default function Home() {
     console.log("🔵 USER ACTION: Changed language to", newLanguage);
     setLanguage(newLanguage);
     setCurrentSentence(null);
-    setWordScores([]);
-    setSimpleTips([]);
-    setDetailedFeedback([]);
+    setAnalysisResult(null);
     // Load new sentence with the new language immediately
     loadNewSentence(newLanguage);
-  };
-
-  const handleModelChange = (newModel: AIModel) => {
-    console.log("🔵 USER ACTION: Changed model to", newModel);
-    setSelectedModel(newModel);
-    // Immediately generate a new sentence with the new model
-    setCurrentSentence(null);
-    setWordScores([]);
-    setSimpleTips([]);
-    setDetailedFeedback([]);
-
-    // Generate new sentence using the new model
-    // Use setTimeout to ensure state is updated before loading
-    setTimeout(() => {
-      loadNewSentence(language, newModel);
-    }, 0);
   };
 
   const handleListen = async () => {
@@ -164,68 +183,54 @@ export default function Home() {
   const handleStopRecording = async () => {
     if (!currentSentence) return;
 
-    console.log("🔵 USER ACTION: Stopped recording", { language, model: selectedModel, text: currentSentence.originalScript });
+    console.log("🔵 USER ACTION: Stopped recording", { language, text: currentSentence.originalScript });
     setIsRecording(false);
     setIsProcessing(true);
 
-    let response: Response | undefined;
     try {
       const audioBlob = await audioRecorder.current.stopRecording();
-      console.log("📤 Sending audio to /api/pronunciation/analyze", {
+      console.log("📤 Sending audio for 2-stage analysis", {
         audioSize: audioBlob.size,
         language,
-        model: selectedModel
       });
 
-      // Send audio to backend for analysis
+      // Prepare form data
       const formData = new FormData();
       formData.append("audio", audioBlob, "recording.webm");
       formData.append("referenceText", currentSentence.originalScript);
+      formData.append("transliteration", currentSentence.transliteration);
       formData.append("language", language);
-      formData.append("model", selectedModel);
 
-      response = await fetch("/api/pronunciation/analyze", {
+      // Call new v2 endpoint (2-stage analysis)
+      const response = await fetch("/api/pronunciation/analyze-v2", {
         method: "POST",
         body: formData,
       });
 
       if (!response.ok) {
-        throw new Error("Failed to analyze pronunciation");
+        throw new Error("Pronunciation analysis failed");
       }
 
-      const result = await response.json();
-      console.log("✅ Pronunciation analysis successful", {
-        wordCount: result.wordScores?.length,
-        simpleTipsCount: result.simpleTips?.length,
-        detailedFeedbackCount: result.detailedFeedback?.length
-      });
-      setWordScores(result.wordScores || []);
-      setSimpleTips(result.simpleTips || []);
-      setDetailedFeedback(result.detailedFeedback || []);
+      const result: AnalysisResult = await response.json();
+
+      console.log("✅ 2-stage analysis successful");
+      console.log("Overall score:", result.overallScore);
+      console.log("Total time:", result.timing.total, "ms");
+      console.log("Total tokens:", result.costBreakdown.total.totalTokens);
+
+      // Set analysis result
+      setAnalysisResult(result);
 
       toast({
         title: "Analysis Complete",
-        description: "Your pronunciation has been analyzed!",
+        description: `Your pronunciation scored ${result.overallScore}%`,
       });
     } catch (error: any) {
       console.error("Error analyzing pronunciation:", error);
-      
-      // Check if it's a Flash Lite unsupported model error
-      const errorMessage = error?.message || String(error);
-      let responseData: any = {};
-      if (response && !response.ok) {
-        responseData = await response.json().catch(() => ({}));
-      }
-      const isFlashLiteError = selectedModel === "gemini-2.5-flash-lite" && 
-        (errorMessage.includes("UNSUPPORTED_MODEL") || 
-         errorMessage.includes("not supported") ||
-         responseData?.details?.includes("UNSUPPORTED_MODEL"));
-      
+
       toast({
         title: "Error",
-        description: isFlashLiteError 
-          ? "Flash Lite is not currently available. Please try Flash or Pro model instead."
-          : "Failed to analyze your pronunciation. Please try again.",
+        description: "Failed to analyze your pronunciation. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -237,7 +242,7 @@ export default function Home() {
     loadNewSentence();
   };
 
-  const hasResults = wordScores.length > 0;
+  const hasResults = analysisResult !== null;
 
   if (isLoadingSentence || !currentSentence) {
     return (
@@ -249,7 +254,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="max-w-4xl mx-auto px-4 md:px-8 py-8">
+      <div className="container mx-auto px-6 md:px-12 lg:px-16 py-8">
         <header className="text-center mb-8">
           <h1 className="text-3xl md:text-4xl font-semibold mb-2" data-testid="text-app-title">
             Pronunciation Coach
@@ -264,21 +269,29 @@ export default function Home() {
             <LanguageSelector language={language} onLanguageChange={handleLanguageChange} />
           </div>
 
-          <ModelSelector
-            selectedModel={selectedModel}
-            onModelChange={handleModelChange}
-          />
-
           {isLoadingSentence ? (
             <div className="py-12">
               <LoadingSpinner message="Loading new sentence..." />
             </div>
           ) : (
-            <SentenceDisplay
-              language={language}
-              originalScript={currentSentence.originalScript}
-              transliteration={currentSentence.transliteration}
-            />
+            <>
+              <SentenceDisplay
+                language={language}
+                originalScript={currentSentence.originalScript}
+                transliteration={currentSentence.transliteration}
+              />
+              {currentSentence.tokenUsage && (
+                <div className="flex justify-center">
+                  <div className="w-full max-w-md">
+                    <TokenUsageDisplay
+                      tokenUsage={currentSentence.tokenUsage}
+                      model="gemini-2.5-flash-lite"
+                      label="Sentence Generation Cost"
+                    />
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
           <AudioControls
@@ -305,15 +318,33 @@ export default function Home() {
 
           {isProcessing && <LoadingSpinner message="Analyzing your pronunciation..." />}
 
-          {hasResults && !isProcessing && (
-            <>
-              <PronunciationResults
-                wordScores={wordScores}
-                language={language}
-                model={selectedModel}
-              />
-              <FeedbackSection simpleTips={simpleTips} detailedFeedback={detailedFeedback} />
-            </>
+          {hasResults && !isProcessing && analysisResult && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-semibold text-center">Pronunciation Analysis Results</h2>
+
+              {/* Two-column layout: Results + Cost Breakdown */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Main Results (takes 2 columns on large screens) */}
+                <div className="lg:col-span-2">
+                  <PronunciationResultsV2
+                    wordScores={analysisResult.wordScores}
+                    transcription={analysisResult.transcription}
+                    transcriptionTransliteration={analysisResult.transcriptionTransliteration}
+                    overallScore={analysisResult.overallScore}
+                    tips={analysisResult.tips}
+                    language={language}
+                  />
+                </div>
+
+                {/* Cost Breakdown (takes 1 column) */}
+                <div>
+                  <CostBreakdown
+                    costBreakdown={analysisResult.costBreakdown}
+                    timing={analysisResult.timing}
+                  />
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </div>
